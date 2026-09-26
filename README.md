@@ -2,7 +2,7 @@
 
 Win and podium probabilities for the next Formula 1 race, from a model backtested on every 2026 race so far and 20,000 Monte Carlo race simulations.
 
-**Live site:** _add your GitHub Pages link here_
+**Live site:** https://swishnu.github.io/f1-race-predictor/
 
 ## 2026 Azerbaijan GP prediction
 
