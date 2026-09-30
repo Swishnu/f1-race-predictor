@@ -1,6 +1,14 @@
 {
-  "generated_utc": "2026-09-30 05:30 UTC",
-  "model_version": "v1",
+  "generated_utc": "2026-09-30 05:37 UTC",
+  "model_version": "v2",
+  "coefficients": {
+    "grid": 2.66,
+    "quali_gap_pct": 1.29,
+    "pace_gap_pct": 0.39,
+    "points_before": -0.53,
+    "out_of_position": -0.67
+  },
+  "p_dnf": 0.215,
   "next_event": {
     "round": 16,
     "event": "Bahrain Grand Prix",
@@ -336,7 +344,7 @@
       "top_pick_correct": 8,
       "winner_in_top3": 10,
       "pole_sitter_won": 6,
-      "avg_p_winner": 0.337
+      "avg_p_winner": 0.35
     },
     "races": [
       {
@@ -345,7 +353,7 @@
         "winner": "ANT",
         "winner_grid": 2,
         "model_pick": "ANT",
-        "p_winner": 0.551,
+        "p_winner": 0.577,
         "winner_model_rank": 1
       },
       {
@@ -354,7 +362,7 @@
         "winner": "ANT",
         "winner_grid": 1,
         "model_pick": "ANT",
-        "p_winner": 0.584,
+        "p_winner": 0.617,
         "winner_model_rank": 1
       },
       {
@@ -363,7 +371,7 @@
         "winner": "HAM",
         "winner_grid": 2,
         "model_pick": "RUS",
-        "p_winner": 0.265,
+        "p_winner": 0.28,
         "winner_model_rank": 2
       },
       {
@@ -372,7 +380,7 @@
         "winner": "RUS",
         "winner_grid": 1,
         "model_pick": "RUS",
-        "p_winner": 0.333,
+        "p_winner": 0.362,
         "winner_model_rank": 1
       },
       {
@@ -381,7 +389,7 @@
         "winner": "LEC",
         "winner_grid": 2,
         "model_pick": "ANT",
-        "p_winner": 0.166,
+        "p_winner": 0.17,
         "winner_model_rank": 2
       },
       {
@@ -390,7 +398,7 @@
         "winner": "ANT",
         "winner_grid": 1,
         "model_pick": "ANT",
-        "p_winner": 0.381,
+        "p_winner": 0.397,
         "winner_model_rank": 1
       },
       {
@@ -399,7 +407,7 @@
         "winner": "NOR",
         "winner_grid": 1,
         "model_pick": "NOR",
-        "p_winner": 0.298,
+        "p_winner": 0.323,
         "winner_model_rank": 1
       },
       {
@@ -408,7 +416,7 @@
         "winner": "NOR",
         "winner_grid": 1,
         "model_pick": "NOR",
-        "p_winner": 0.26,
+        "p_winner": 0.285,
         "winner_model_rank": 1
       },
       {
@@ -418,7 +426,7 @@
         "winner_grid": 19,
         "model_pick": "RUS",
         "p_winner": 0.001,
-        "winner_model_rank": 12
+        "winner_model_rank": 11
       },
       {
         "round": 14,
@@ -426,7 +434,7 @@
         "winner": "ANT",
         "winner_grid": 2,
         "model_pick": "ANT",
-        "p_winner": 0.398,
+        "p_winner": 0.346,
         "winner_model_rank": 1
       },
       {
@@ -435,10 +443,10 @@
         "winner": "RUS",
         "winner_grid": 1,
         "model_pick": "RUS",
-        "p_winner": 0.466,
+        "p_winner": 0.497,
         "winner_model_rank": 1
       }
     ],
-    "sigma": 2.0
+    "sigma": 1.75
   }
 }

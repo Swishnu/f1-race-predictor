@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SITE_DATA = ROOT / "docs" / "data"
 RACES = SITE_DATA / "races"
 
-MODEL_VERSION = "v1"
+MODEL_VERSION = "v2"
 
 FIRST_BACKTEST_ROUND = 5          # need a few races of history before predicting
 SIGMAS = np.arange(0.5, 6.01, 0.25)
@@ -113,6 +113,7 @@ def predict_race(target, history, cols, sigma):
     if provisional:
         target["grid"] = target["pace_gap_pct"].rank(method="first")
         target["quali_gap_pct"] = target["pace_gap_pct"]
+        target = features.add_out_of_position(target)
 
     event = target["event"].iat[0]
     street = event in STREET_CIRCUITS
@@ -137,6 +138,7 @@ def predict_race(target, history, cols, sigma):
         "drivers": [
             {"driver": r.driver, "name": r.name, "team": r.team, "grid": int(r.grid),
              "pace_gap_pct": round(float(r.pace_gap_pct), 3),
+             "out_of_position": round(float(r.out_of_position), 1),
              "pred_pos": round(float(r.pred_pos), 2),
              "p_win": round(float(r.p_win), 4), "p_podium": round(float(r.p_podium), 4)}
             for r in target.itertuples()
@@ -228,9 +230,12 @@ def main():
               f"winner {r['winner']} given {r['p_winner']:.1%}, podium {r['podium_hits']}/3 in model top 3")
 
     # ---- export for the website
+    current = model.fit(done, cols)
     site = {
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "model_version": MODEL_VERSION,
+        "coefficients": {k: float(v) for k, v in model.coefficients(current, cols).items()},
+        "p_dnf": round(dnf_rate(done), 3),
         "next_event": next_event(int(done["round"].max())),
         "prediction": prediction,
         "live": live,

@@ -138,10 +138,11 @@
     <h2>How it works</h2>
     <div class="steps">
       <div class="step"><h3>Data</h3><p>Every 2026 session via FastF1: qualifying, race results, and each driver's long-run practice pace (consistent 4+ lap stints, safety-car laps removed).</p></div>
-      <div class="step"><h3>Model</h3><p>A ridge regression predicts each driver's finishing position from grid slot, qualifying gap, long-run pace and championship points. It predicts position, not "win", because 300+ finishing positions teach more than a handful of winners.</p></div>
+      <div class="step"><h3>Model</h3><p>A ridge regression predicts each driver's finishing position from grid slot, qualifying gap, long-run pace, championship points and, since v2, whether a strong car is starting out of position. It predicts position, not "win", because 300+ finishing positions teach more than a handful of winners.</p></div>
       <div class="step"><h3>Simulation</h3><p>A Monte Carlo simulation of 20,000 races: predicted position + random noise, random DNFs, and on street circuits a likely safety car that shuffles the order. Win % = how often each driver finishes first.</p></div>
       <div class="step"><h3>Calibration</h3><p>The noise level is not guessed. It's the value whose podium odds best matched real 2026 results. Calibrating on winners alone overfit to a predictable season and made the model overconfident.</p></div>
     </div>
+    <p class="note"><b>v2 (after Baku):</b> v1 underrated Antonelli, who went from P16 to P5 in the Mercedes. Adding "fast in practice but starting back" didn't help, because midfield practice pace is too noisy. Adding "strong car starting behind its usual slot" did help: podium log-loss improved from 1.048 to 1.030 over 11 races. It's a small, honest gain. Big comebacks are rare, so the model still stays cautious about them. A gradient-boosting model was much worse, because it overfit ~300 rows.</p>
     <p class="note" id="coefs"></p>
   </section>
 
@@ -185,16 +186,14 @@ function renderPrediction(d, backtestRaces) {
       <div class="bar pod"><i style="width:${x.p_podium * 100}%"></i><span>${pct(x.p_podium)}</span></div>
     </div>`).join(""));
 
-  // driver to watch: biggest gap between long-run pace rank and grid slot
-  const paceRank = Object.fromEntries([...drivers].sort((x, y) => x.pace_gap_pct - y.pace_gap_pct).map((x, i) => [x.driver, i + 1]));
-  const w = drivers.filter(x => paceRank[x.driver] <= 5).sort((x, y) => (y.grid - paceRank[y.driver]) - (x.grid - paceRank[x.driver]))[0];
-  const comeback = backtestRaces.find(r => r.winner_grid >= 10);
-  if (w && w.grid - paceRank[w.driver] >= 6) {
+  // driver to watch: a strong car starting well behind its usual slot
+  const w = [...drivers].sort((x, y) => (y.out_of_position || 0) - (x.out_of_position || 0))[0];
+  if (w && w.out_of_position >= 6) {
     el("watch", `<div class="watch" style="--team:${color(w.team)}">
-      <div class="big">${pct(w.p_win)}</div>
-      <p><b>${w.name}</b> starts <b>P${w.grid}</b> but had the <b>#${paceRank[w.driver]} long-run pace</b> in practice.
-      The model is linear in grid position and doesn't know that a fast car at the back will overtake.
-      ${comeback ? `At the ${comeback.event} it gave ${comeback.winner} ${pct(comeback.p_winner)} from P${comeback.winner_grid}, and ${comeback.winner} won.` : ""}</p>
+      <div class="big">${pct(w.p_podium)}</div>
+      <p>Podium odds for <b>${w.name}</b>, starting <b>P${w.grid}</b> in a car that usually starts around the front.
+      Since v2 the model expects a strong car out of position to move forward, but big comebacks are rare in the data, so it stays cautious.
+      At Baku, v1 gave Antonelli a 2.9% podium chance from P16, and Antonelli finished 5th.</p>
     </div>`);
   } else {
     document.getElementById("watch-section").hidden = true;
@@ -261,14 +260,16 @@ function renderBacktest(bt) {
       <td class="mono">${pct(r.p_winner)}</td></tr>`).join(""));
 }
 
-function renderCoefs(d) {
-  const c = d.coefficients, a = d.assumptions;
-  el("coefs", `What the model learned, as finishing positions per 1 standard deviation of each feature:
-    grid <span class="mono">+${c.grid}</span>,
-    qualifying gap <span class="mono">+${c.quali_gap_pct}</span>,
-    long-run pace <span class="mono">+${c.pace_gap_pct}</span>,
-    championship points <span class="mono">${c.points_before}</span>.
-    Grid slot dominates. Race assumptions: ${pct(a.p_dnf)} DNF rate per driver (2026 average)${a.p_safety_car ? `, ${pct(a.p_safety_car)} safety-car chance (street circuit)` : ""}.`);
+const FEATURE_LABELS = {
+  grid: "grid slot", quali_gap_pct: "qualifying gap", pace_gap_pct: "long-run pace",
+  points_before: "championship points", out_of_position: "strong car out of position",
+};
+function renderCoefs(site) {
+  const c = site.coefficients;
+  const fmt = v => `${v > 0 ? "+" : ""}${v}`;
+  el("coefs", `What model ${site.model_version} learned, as finishing positions per 1 standard deviation of each feature (negative = finishes higher): ` +
+    Object.entries(c).map(([k, v]) => `${FEATURE_LABELS[k] || k} <span class="mono">${fmt(v)}</span>`).join(", ") +
+    `. Grid slot dominates. Race assumptions: ${pct(site.p_dnf)} DNF rate per driver (2026 average), plus a 60% safety-car chance on street circuits.`);
 }
 
 function render(site) {
@@ -285,7 +286,6 @@ function render(site) {
       : `Grid from qualifying · updated ${pred.generated_utc}`;
     if (pred.provisional) badge.classList.add("warn");
     renderPrediction(pred, site.backtest.races);
-    renderCoefs(pred);
   } else {
     document.getElementById("pred-block").hidden = true;
     el("eyebrow", latest ? `Round ${latest.round} · ${latest.season}` : "2026 season");
@@ -293,11 +293,11 @@ function render(site) {
     document.getElementById("updated").textContent = nxt
       ? `Next up: ${short(nxt.event)} · ${fmtDate(nxt.date)} · prediction published after qualifying`
       : "Season complete";
-    if (latest) renderCoefs(latest);
   }
   if (latest) renderResult(latest);
   renderLive(site.live);
   renderBacktest(site.backtest);
+  renderCoefs(site);
   if (REPO_URL) el("repo", ` · <a href="${REPO_URL}">Source on GitHub</a>`);
 }
 

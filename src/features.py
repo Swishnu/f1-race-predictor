@@ -18,10 +18,12 @@ FEATURES = [
     "quali_gap_pct",
     "pace_gap_pct",
     "points_before",
+    "out_of_position",   # v2
 ]
 
-# Built and backtested but not used: recent_finish made podium log-loss worse
-# (1.031 -> 1.099) and team_strength added nothing on top of points_before.
+# Built and backtested but not used directly: recent_finish made podium
+# log-loss worse (1.031 -> 1.099), and team_strength alone added nothing on
+# top of points_before (it feeds out_of_position instead).
 EXTRA_FEATURES = ["recent_finish", "team_strength"]
 
 MIDFIELD = 11  # neutral finishing position for a 22-car grid when there's no history
@@ -63,6 +65,20 @@ def add_team_strength(df):
     return df.merge(per_race[["team", "round", "team_strength"]], on=["team", "round"], how="left")
 
 
+def add_out_of_position(df):
+    """How many places behind its car's usual slot a driver starts (0 if not behind).
+
+    Teams are ranked by team_strength; the best team's cars "should" fill
+    P1-P2, the next team P3-P4, and so on. A Mercedes starting P16 scores ~14.
+    Backtested against "fast in practice but starting back": practice pace is
+    too noisy in the midfield, while strong cars out of position really do come
+    through (podium log-loss 1.048 -> 1.030 over 11 races).
+    """
+    team_rank = df.groupby("round")["team_strength"].rank(ascending=False, method="dense")
+    df["out_of_position"] = (df["grid"] - (2 * team_rank - 0.5)).clip(lower=0)
+    return df
+
+
 def fill_missing(df):
     """Drivers with no usable long run (crashes, sprint weekends with only FP1)
     fall back to their qualifying gap."""
@@ -77,6 +93,7 @@ def build():
     df = add_points_before(df)
     df = add_recent_finish(df)
     df = add_team_strength(df)
+    df = add_out_of_position(df)
     df = fill_missing(df)
     return df
 

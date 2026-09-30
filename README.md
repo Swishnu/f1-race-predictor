@@ -16,19 +16,37 @@ Every prediction is published before lights out, frozen in [`docs/data/races/`](
 
 ## Backtest
 
-Walk-forward over rounds 5–15: each race is predicted using only the races before it.
+Walk-forward over rounds 5–15: each race is predicted using only the races before it (model v2).
 
 | | Model | Baseline: "pole sitter wins" |
 |---|---|---|
 | Top pick won | **8 / 11** | 6 / 11 |
 | Winner in model's top 3 | **10 / 11** | – |
-| Avg. probability given to the actual winner | 34% | – |
+| Avg. probability given to the actual winner | 35% | – |
+
+## v2: fixing the blind spot (after Baku)
+
+v1 gave Antonelli a 2.9% podium chance from P16 at Baku, and Antonelli finished 5th. Every option was scored on podium log-loss over all 11 races, not just on Baku, to avoid tuning to a race already seen:
+
+| Version | Podium log-loss | Top pick | Baku: Antonelli podium odds |
+|---|---|---|---|
+| v1 | 1.048 | 8/11 | 1.7% |
+| + "fast in practice, starting back" | 1.061 | 9/11 | 1.7% |
+| **+ "strong car, starting behind its usual slot" (v2)** | **1.030** | 8/11 | 4.9% |
+| Gradient boosting (non-linear) | 1.517 | 6/11 | 3.5% |
+
+(Antonelli's podium odds in this table are without the extra street-circuit safety-car chance. With it, as published, v1 gave 2.9% and v2 gives 6.7%.)
+
+- **The obvious fix didn't work.** Cars with top-5 practice pace starting P8+ beat the model by 1.4 places on average, but so did every other car starting P8+ (1.3). Midfield practice pace is mostly noise (fuel loads).
+- **The drivers who really came through were in top-team cars** (Antonelli, Norris, Hadjar, Leclerc), so v2 measures car strength out of position instead.
+- **The gain is small and honest.** Big comebacks are rare, so the model stays cautious. v2 also gives Verstappen slightly lower odds at Baku (P8 → P2: 18.6% → 13.7% podium).
+- **More complex was worse.** Gradient boosting overfit the ~300 rows badly.
 
 ## How it works
 
 1. **Data** ([src/data.py](src/data.py)): pulls every 2026 session with [FastF1](https://docs.fastf1.dev/): qualifying gap to pole, grid slot, race result and **long-run practice pace**. A stint counts as a long run if 4+ laps (at least 75% of the stint) sit within 4% of its best lap. That rejects push/cool-down qualifying runs. Safety-car and red-flag laps are removed.
 2. **Features** ([src/features.py](src/features.py)): a race-N feature only uses results from races before N (`groupby` + `shift(1)`), so nothing leaks from the future.
-3. **Model** ([src/model.py](src/model.py)): ridge regression predicting **finishing position** rather than "won". 2026 has 14 winners but ~300 finishing positions to learn from.
+3. **Model** ([src/model.py](src/model.py)): ridge regression predicting **finishing position** rather than "won". 2026 has only a handful of winners but 300+ finishing positions to learn from. Features: grid slot, qualifying gap, long-run pace, championship points, and (since v2) **out of position**: how many places behind its car's usual slot a driver starts.
 4. **Simulation** ([src/simulate.py](src/simulate.py)): each of 20,000 races adds random noise to the predicted positions, applies random DNFs (2026 average rate), and on street circuits a likely safety car (60%) that adds extra shuffle. Win % = share of simulations each driver wins.
 5. **Calibration** ([src/predict.py](src/predict.py)): the noise level is chosen by minimising podium log-loss on the backtest.
 
