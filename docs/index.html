@@ -68,11 +68,21 @@
 
   footer { color: var(--muted); font-size: 13px; padding: 28px 0 48px; border-top: 1px solid var(--line); }
 
+  .res-row { display: grid; grid-template-columns: 34px minmax(120px, 1.3fr) 110px 1fr 1fr; gap: 12px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .res-head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; border: 0; padding-top: 0; }
+  .move { font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--muted); }
+  .move b { color: var(--good); font-weight: 500; }
+  .move b.down { color: var(--bad); }
+  .card .v.good { color: var(--good); } .card .v.bad { color: var(--bad); }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #1d2029; color: var(--muted); margin-left: 6px; vertical-align: 2px; }
+
   @media (max-width: 640px) {
     .hero { grid-template-columns: 1fr; }
     .steps { grid-template-columns: 1fr; }
     .grid-head, .row { grid-template-columns: 24px minmax(90px, 1fr) 1.4fr; }
     .grid-head .pod-h, .row .pod { display: none; }
+    .res-row { grid-template-columns: 24px minmax(90px, 1fr) 70px 1fr; }
+    .res-row .pod { display: none; }
   }
 </style>
 </head>
@@ -81,28 +91,44 @@
   <header>
     <div class="eyebrow" id="eyebrow"></div>
     <h1 id="title">F1 Race Predictor</h1>
-    <p class="sub">Win and podium probabilities from a model backtested on every 2026 race so far and 20,000 simulated races.</p>
+    <p class="sub">Win and podium probabilities for every 2026 race: a model backtested on the season so far and 20,000 simulated races, with every prediction published before lights out and scored after.</p>
     <span class="badge" id="updated"></span>
   </header>
 
-  <section>
-    <h2>The prediction</h2>
-    <div class="hero" id="hero"></div>
+  <div id="pred-block">
+    <section>
+      <h2>The prediction</h2>
+      <div class="hero" id="hero"></div>
+    </section>
+
+    <section>
+      <h2>Every driver</h2>
+      <div class="grid-head"><span></span><span>Driver</span><span>Win</span><span class="pod-h">Podium</span></div>
+      <div id="rows"></div>
+    </section>
+
+    <section id="watch-section">
+      <h2>Where the model is probably wrong</h2>
+      <div id="watch"></div>
+    </section>
+  </div>
+
+  <section id="result-section" hidden>
+    <h2 id="result-title">Prediction vs result</h2>
+    <div class="hero" id="result-cards"></div>
+    <p class="note" id="result-note"></p>
+    <div class="res-row res-head"><span></span><span>Finished</span><span>Grid → finish</span><span>Model: win</span><span class="pod">Model: podium</span></div>
+    <div id="result-rows"></div>
+  </section>
+
+  <section id="live-section" hidden>
+    <h2>Live record</h2>
+    <p class="note">Predictions published before each race, scored afterwards. This is the real test: no hindsight.</p>
+    <div class="scroll"><table id="live-table"></table></div>
   </section>
 
   <section>
-    <h2>Every driver</h2>
-    <div class="grid-head"><span></span><span>Driver</span><span>Win</span><span class="pod-h">Podium</span></div>
-    <div id="rows"></div>
-  </section>
-
-  <section id="watch-section">
-    <h2>Where the model is probably wrong</h2>
-    <div id="watch"></div>
-  </section>
-
-  <section>
-    <h2>Track record this season</h2>
+    <h2>Backtest this season</h2>
     <div class="hero" id="bt-cards"></div>
     <p class="note">Walk-forward backtest: to "predict" each race, the model was trained only on the races before it, as if run the night before.</p>
     <div class="scroll"><table id="bt-table"></table></div>
@@ -112,8 +138,8 @@
     <h2>How it works</h2>
     <div class="steps">
       <div class="step"><h3>Data</h3><p>Every 2026 session via FastF1: qualifying, race results, and each driver's long-run practice pace (consistent 4+ lap stints, safety-car laps removed).</p></div>
-      <div class="step"><h3>Model</h3><p>A ridge regression predicts each driver's finishing position from grid slot, qualifying gap, long-run pace and championship points. It predicts position, not "win", because 300 finishing positions teach more than 14 winners.</p></div>
-      <div class="step"><h3>Simulation</h3><p>20,000 races: predicted position + random noise, random DNFs, and a safety car in some races that shuffles the order. Win % = how often each driver finishes first.</p></div>
+      <div class="step"><h3>Model</h3><p>A ridge regression predicts each driver's finishing position from grid slot, qualifying gap, long-run pace and championship points. It predicts position, not "win", because 300+ finishing positions teach more than a handful of winners.</p></div>
+      <div class="step"><h3>Simulation</h3><p>A Monte Carlo simulation of 20,000 races: predicted position + random noise, random DNFs, and on street circuits a likely safety car that shuffles the order. Win % = how often each driver finishes first.</p></div>
       <div class="step"><h3>Calibration</h3><p>The noise level is not guessed. It's the value whose podium odds best matched real 2026 results. Calibrating on winners alone overfit to a predictable season and made the model overconfident.</p></div>
     </div>
     <p class="note" id="coefs"></p>
@@ -125,7 +151,7 @@
   </footer>
 </div>
 
-<script src="data/prediction.js"></script>
+<script src="data/site.js"></script>
 <script>
 const REPO_URL = "https://github.com/Swishnu/f1-race-predictor";
 
@@ -136,30 +162,20 @@ const TEAM_COLORS = {
   "Haas F1 Team": "#B6BABD", "Cadillac": "#C9A227",
 };
 const color = team => TEAM_COLORS[team] || "#888";
-const pct = p => p >= 0.01 ? `${+(p * 100).toFixed(p >= 0.095 ? 0 : 1)}%` : p > 0 ? "<1%" : "0%";
+const pct = p => p >= 0.095 ? `${Math.round(p * 100)}%` : p >= 0.001 ? `${+(p * 100).toFixed(1)}%` : p > 0 ? "<0.1%" : "0%";
 const el = (id, html) => { document.getElementById(id).innerHTML = html; };
+const last = x => x.name.split(" ").slice(-1)[0];
+const short = ev => ev.replace("Grand Prix", "GP");
+const fmtDate = iso => new Date(iso + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 
-function render(d) {
+function renderPrediction(d, backtestRaces) {
   const drivers = d.drivers;
-  const byDriver = Object.fromEntries(drivers.map(x => [x.driver, x]));
-  const last = x => x.name.split(" ").slice(-1)[0];
-
-  el("eyebrow", `Round ${d.round} · ${d.season}`);
-  el("title", `${d.event.replace("Grand Prix", "GP")}: who wins?`);
-  document.getElementById("updated").textContent = d.provisional
-    ? `Provisional: before qualifying (grid = practice pace order) · ${d.generated_utc}`
-    : `Grid from qualifying · updated ${d.generated_utc}`;
-  if (d.provisional) document.getElementById("updated").classList.add("warn");
-
-  // hero
   const [a, b] = drivers;
-  const fav = [...drivers].sort((x, y) => y.p_podium - x.p_podium)[0];
   el("hero", `
     <div class="card" style="--team:${color(a.team)}"><div class="k">Favourite</div><div class="v">${last(a)}</div><div class="d">${pct(a.p_win)} to win · starts P${a.grid}</div></div>
     <div class="card"><div class="k">Main threat</div><div class="v">${last(b)}</div><div class="d">${pct(b.p_win)} to win · starts P${b.grid}</div></div>
     <div class="card"><div class="k">Field vs favourite</div><div class="v">${pct(1 - a.p_win)}</div><div class="d">chance someone else wins</div></div>`);
 
-  // rows
   const maxWin = Math.max(...drivers.map(x => x.p_win));
   el("rows", drivers.map((x, i) => `
     <div class="row" style="--team:${color(x.team)}">
@@ -171,45 +187,121 @@ function render(d) {
 
   // driver to watch: biggest gap between long-run pace rank and grid slot
   const paceRank = Object.fromEntries([...drivers].sort((x, y) => x.pace_gap_pct - y.pace_gap_pct).map((x, i) => [x.driver, i + 1]));
-  const w = [...drivers].filter(x => paceRank[x.driver] <= 5).sort((x, y) => (y.grid - paceRank[y.driver]) - (x.grid - paceRank[x.driver]))[0];
-  const monza = d.backtest.races.find(r => r.winner_grid >= 10);
+  const w = drivers.filter(x => paceRank[x.driver] <= 5).sort((x, y) => (y.grid - paceRank[y.driver]) - (x.grid - paceRank[x.driver]))[0];
+  const comeback = backtestRaces.find(r => r.winner_grid >= 10);
   if (w && w.grid - paceRank[w.driver] >= 6) {
     el("watch", `<div class="watch" style="--team:${color(w.team)}">
       <div class="big">${pct(w.p_win)}</div>
       <p><b>${w.name}</b> starts <b>P${w.grid}</b> but had the <b>#${paceRank[w.driver]} long-run pace</b> in practice.
       The model is linear in grid position and doesn't know that a fast car at the back will overtake.
-      ${monza ? (() => { const n = byDriver[monza.winner] ? last(byDriver[monza.winner]) : monza.winner; return `At the ${monza.event} it gave ${n} ${pct(monza.p_winner)} from P${monza.winner_grid}. ${n} won.`; })() : ""}</p>
+      ${comeback ? `At the ${comeback.event} it gave ${comeback.winner} ${pct(comeback.p_winner)} from P${comeback.winner_grid}, and ${comeback.winner} won.` : ""}</p>
     </div>`);
   } else {
     document.getElementById("watch-section").hidden = true;
   }
+}
 
-  // backtest
-  const s = d.backtest.summary;
+function renderResult(p) {
+  document.getElementById("result-section").hidden = false;
+  el("result-title", `${short(p.event)}: prediction vs result`);
+  const r = p.result;
+  const by = Object.fromEntries(p.drivers.map(x => [x.driver, x]));
+  const pick = by[r.model_pick], winner = by[r.winner];
+  const finished = p.drivers.filter(x => x.finish_pos).sort((x, y) => x.finish_pos - y.finish_pos);
+  const mover = finished.slice(0, 10).sort((x, y) => (y.race_grid - y.finish_pos) - (x.race_grid - x.finish_pos))[0];
+
+  el("result-cards", `
+    <div class="card" style="--team:${color(pick.team)}"><div class="k">Model's pick</div>
+      <div class="v ${r.pick_won ? "good" : "bad"}">${last(pick)} ${r.pick_won ? "✓" : "✗"}</div>
+      <div class="d">${pct(pick.p_win)} to win · finished P${pick.finish_pos}</div></div>
+    <div class="card"><div class="k">Actual podium</div>
+      <div class="v">${r.podium.map(d => by[d].driver).join(" · ")}</div>
+      <div class="d">model's podium odds: ${r.podium.map(d => pct(by[d].p_podium)).join(", ")}</div></div>
+    <div class="card"><div class="k">Biggest mover</div>
+      <div class="v">${last(mover)}</div>
+      <div class="d">P${mover.race_grid} → P${mover.finish_pos} · model gave ${pct(mover.p_podium)} podium</div></div>`);
+
+  el("result-note", `Published ${p.generated_utc}, before the race (model ${p.model_version}). ` +
+    (r.pick_won ? `The favourite won. ` : `The winner was the model's #${r.winner_model_rank} pick at ${pct(r.p_winner)}. `) +
+    `${r.podium_hits} of the 3 podium finishers were in the model's top 3.`);
+
+  el("result-rows", finished.slice(0, 10).map(x => {
+    const gain = x.race_grid - x.finish_pos;
+    return `<div class="res-row" style="--team:${color(x.team)}">
+      <span class="pos mono">${x.finish_pos}</span>
+      <div class="drv"><span class="swatch"></span><div><b>${x.name}</b><small>${x.team}</small></div></div>
+      <span class="move">P${x.race_grid} → P${x.finish_pos} ${gain ? `<b class="${gain < 0 ? "down" : ""}">${gain > 0 ? "+" : ""}${gain}</b>` : ""}</span>
+      <div class="bar"><i style="width:${x.p_win * 100}%"></i><span>${pct(x.p_win)}</span></div>
+      <div class="bar pod"><i style="width:${x.p_podium * 100}%"></i><span>${pct(x.p_podium)}</span></div>
+    </div>`;
+  }).join(""));
+}
+
+function renderLive(live) {
+  if (!live.length) return;
+  document.getElementById("live-section").hidden = false;
+  el("live-table", `<tr><th>Rd</th><th>Race</th><th>Model pick</th><th>Winner</th><th>Winner's odds</th><th>Podium in top 3</th></tr>` +
+    live.map(p => { const r = p.result; return `<tr>
+      <td class="mono">${p.round}</td><td>${p.event.replace(" Grand Prix", "")}<span class="tag">${p.model_version}</span></td>
+      <td class="${r.pick_won ? "hit" : "miss"}">${r.model_pick}</td><td>${r.winner}</td>
+      <td class="mono">${pct(r.p_winner)}</td><td class="mono">${r.podium_hits}/3</td></tr>`; }).join(""));
+}
+
+function renderBacktest(bt) {
+  const s = bt.summary;
   el("bt-cards", `
     <div class="card"><div class="k">Top pick won</div><div class="v">${s.top_pick_correct}/${s.races}</div><div class="d">vs ${s.pole_sitter_won}/${s.races} for "pole sitter wins"</div></div>
     <div class="card"><div class="k">Winner in top 3</div><div class="v">${s.winner_in_top3}/${s.races}</div><div class="d">of the model's picks</div></div>
     <div class="card"><div class="k">Avg. odds for the winner</div><div class="v">${pct(s.avg_p_winner)}</div><div class="d">a uniform guess would be ~5%</div></div>`);
   el("bt-table", `<tr><th>Rd</th><th>Race</th><th>Winner (grid)</th><th>Model pick</th><th>Winner's odds</th></tr>` +
-    d.backtest.races.map(r => `<tr>
+    bt.races.map(r => `<tr>
       <td class="mono">${r.round}</td><td>${r.event.replace(" Grand Prix", "")}</td>
       <td>${r.winner} <span class="note">(P${r.winner_grid})</span></td>
       <td class="${r.model_pick === r.winner ? "hit" : "miss"}">${r.model_pick}</td>
       <td class="mono">${pct(r.p_winner)}</td></tr>`).join(""));
+}
 
-  const c = d.coefficients;
+function renderCoefs(d) {
+  const c = d.coefficients, a = d.assumptions;
   el("coefs", `What the model learned, as finishing positions per 1 standard deviation of each feature:
-    grid <span class="mono">${c.grid > 0 ? "+" : ""}${c.grid}</span>,
+    grid <span class="mono">+${c.grid}</span>,
     qualifying gap <span class="mono">+${c.quali_gap_pct}</span>,
     long-run pace <span class="mono">+${c.pace_gap_pct}</span>,
     championship points <span class="mono">${c.points_before}</span>.
-    Grid slot dominates. Race assumptions: ${pct(d.assumptions.p_safety_car)} safety-car chance, ${pct(d.assumptions.p_dnf)} DNF rate per driver (2026 average).`);
+    Grid slot dominates. Race assumptions: ${pct(a.p_dnf)} DNF rate per driver (2026 average)${a.p_safety_car ? `, ${pct(a.p_safety_car)} safety-car chance (street circuit)` : ""}.`);
+}
 
+function render(site) {
+  const pred = site.prediction;
+  const latest = site.live[site.live.length - 1];
+  const nxt = site.next_event;
+
+  if (pred) {
+    el("eyebrow", `Round ${pred.round} · ${pred.season}`);
+    el("title", `${short(pred.event)}: who wins?`);
+    const badge = document.getElementById("updated");
+    badge.textContent = pred.provisional
+      ? `Provisional: before qualifying (grid = practice pace order) · ${pred.generated_utc}`
+      : `Grid from qualifying · updated ${pred.generated_utc}`;
+    if (pred.provisional) badge.classList.add("warn");
+    renderPrediction(pred, site.backtest.races);
+    renderCoefs(pred);
+  } else {
+    document.getElementById("pred-block").hidden = true;
+    el("eyebrow", latest ? `Round ${latest.round} · ${latest.season}` : "2026 season");
+    el("title", latest ? `${short(latest.event)}: how did the model do?` : "F1 Race Predictor");
+    document.getElementById("updated").textContent = nxt
+      ? `Next up: ${short(nxt.event)} · ${fmtDate(nxt.date)} · prediction published after qualifying`
+      : "Season complete";
+    if (latest) renderCoefs(latest);
+  }
+  if (latest) renderResult(latest);
+  renderLive(site.live);
+  renderBacktest(site.backtest);
   if (REPO_URL) el("repo", ` · <a href="${REPO_URL}">Source on GitHub</a>`);
 }
 
-if (window.PREDICTION) render(window.PREDICTION);
-else fetch("data/prediction.json").then(r => r.json()).then(render);
+render(window.SITE);
 </script>
 </body>
 </html>

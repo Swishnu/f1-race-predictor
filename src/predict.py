@@ -3,28 +3,40 @@
 Walk-forward backtest: to "predict" round N we train only on rounds 1..N-1,
 exactly as if we'd run this the night before that race. No peeking.
 
-Run:  python -m src.predict     -> prints results, writes docs/data/prediction.{json,js}
+Live predictions are frozen in docs/data/races/round-N.json. They are rewritten
+as the weekend goes on (after FP3, after qualifying), but once the race has a
+result the round is never predicted again, so the file is exactly what was
+published before lights out. Frozen predictions are then scored against the
+real result.
+
+Run:  python -m src.predict     -> prints results, writes docs/data/site.{json,js}
 """
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import fastf1
 import numpy as np
 import pandas as pd
 
-from . import features, model
+from . import data, features, model
 from .simulate import simulate
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "docs" / "data" / "prediction.json"
+SITE_DATA = ROOT / "docs" / "data"
+RACES = SITE_DATA / "races"
+
+MODEL_VERSION = "v1"
 
 FIRST_BACKTEST_ROUND = 5          # need a few races of history before predicting
 SIGMAS = np.arange(0.5, 6.01, 0.25)
 
-# Baku assumptions (not learned from 2026 data, since there's only one race per track):
-# safety cars are common on street circuits, and when one happens the order gets shuffled.
-BAKU_P_SC = 0.6
-BAKU_SC_MULT = 1.3
+# The calibrated noise already covers an average 2026 race. Street circuits get
+# extra chaos on top: a likely safety car that shuffles the order. These are
+# assumptions, not learned (2026 has only one race per track).
+STREET_CIRCUITS = {"Azerbaijan Grand Prix", "Singapore Grand Prix", "Las Vegas Grand Prix", "Monaco Grand Prix"}
+STREET_P_SC = 0.6
+STREET_SC_MULT = 1.3
 
 
 def dnf_rate(df):
@@ -93,59 +105,33 @@ def backtest_report(bt, sigma):
     return r, summary
 
 
-def main():
-    df = features.build()
-    cols = model.usable_features(df)
-    target_round = int(df["round"].max())
-    target = df[df["round"] == target_round].copy()
-    history = df[df["round"] < target_round]
-
+def predict_race(target, history, cols, sigma):
+    """Win / podium probabilities for an upcoming race, as a JSON-ready dict."""
+    target = target.copy()
     # Before qualifying there's no grid: stand in with the practice pace order.
-    provisional = target["grid"].isna().all()
+    provisional = bool(target["grid"].isna().all())
     if provisional:
         target["grid"] = target["pace_gap_pct"].rank(method="first")
         target["quali_gap_pct"] = target["pace_gap_pct"]
 
-    # 1. backtest + calibrate
-    bt = walk_forward(history, cols)
-    sigma, _ = calibrate_sigma(bt)
-    bt_races, bt_summary = backtest_report(bt, sigma)
+    event = target["event"].iat[0]
+    street = event in STREET_CIRCUITS
+    p_sc, sc_mult = (STREET_P_SC, STREET_SC_MULT) if street else (0.0, 1.0)
 
-    # 2. fit on everything, predict the target race
     m = model.fit(history, cols)
     target["pred_pos"] = model.predict(m, target, cols)
-    p_win, p_pod = simulate(target["pred_pos"], sigma, dnf_rate(history),
-                            p_sc=BAKU_P_SC, sc_mult=BAKU_SC_MULT)
-    target["p_win"], target["p_podium"] = p_win, p_pod
+    target["p_win"], target["p_podium"] = simulate(target["pred_pos"], sigma, dnf_rate(history),
+                                                   p_sc=p_sc, sc_mult=sc_mult)
     target = target.sort_values("p_win", ascending=False)
-
-    # ---- print
-    pd.set_option("display.width", 200)
-    print(f"\nFeatures used: {cols}")
-    print(f"Coefficients (per +1 std, in finishing positions): {model.coefficients(m, cols)}")
-    print(f"Calibrated noise sigma: {sigma} positions\n")
-    print("Backtest (walk-forward):")
-    print(bt_races.to_string(index=False))
-    s = bt_summary
-    print(f"\n  top pick correct : {s['top_pick_correct']}/{s['races']}"
-          f"   (baseline 'pole sitter wins': {s['pole_sitter_won']}/{s['races']})")
-    print(f"  winner in top 3  : {s['winner_in_top3']}/{s['races']}")
-    print(f"  avg prob given to actual winner: {s['avg_p_winner']:.1%}\n")
-    label = "PROVISIONAL (pre-qualifying, grid = practice pace order)" if provisional else "grid from qualifying"
-    print(f"{target['event'].iat[0]}: {label}")
-    show = target[["driver", "team", "grid", "pace_gap_pct", "pred_pos", "p_win", "p_podium"]].head(10)
-    print(show.to_string(index=False, float_format=lambda x: f"{x:.2f}"))
-
-    # ---- export for the website
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    out = {
-        "season": 2026,
-        "round": target_round,
-        "event": target["event"].iat[0],
+    return {
+        "season": data.SEASON,
+        "round": int(target["round"].iat[0]),
+        "event": event,
+        "model_version": MODEL_VERSION,
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "provisional": bool(provisional),
+        "provisional": provisional,
         "sigma": sigma,
-        "assumptions": {"p_safety_car": BAKU_P_SC, "sc_noise_mult": BAKU_SC_MULT,
+        "assumptions": {"p_safety_car": p_sc, "sc_noise_mult": sc_mult,
                         "p_dnf": round(dnf_rate(history), 3)},
         "coefficients": {k: float(v) for k, v in model.coefficients(m, cols).items()},
         "drivers": [
@@ -155,12 +141,106 @@ def main():
              "p_win": round(float(r.p_win), 4), "p_podium": round(float(r.p_podium), 4)}
             for r in target.itertuples()
         ],
-        "backtest": {"summary": bt_summary, "races": bt_races.to_dict(orient="records")},
     }
-    OUT.write_text(json.dumps(out, indent=2))
+
+
+def score_live(df):
+    """Attach the real result to every frozen prediction whose race has happened."""
+    scored = []
+    for path in sorted(RACES.glob("round-*.json"), key=lambda p: int(p.stem.split("-")[1])):
+        pred = json.loads(path.read_text())
+        res = df[(df["round"] == pred["round"]) & df["finish_pos"].notna()].set_index("driver")
+        if res.empty:
+            continue
+        for d in pred["drivers"]:
+            if d["driver"] in res.index:
+                r = res.loc[d["driver"]]
+                d["finish_pos"] = int(r["finish_pos"])
+                d["race_grid"] = int(r["grid"])
+                d["dnf"] = bool(r["dnf"])
+        ranked = pred["drivers"]  # already sorted by p_win
+        winner = next(d for d in ranked if d.get("finish_pos") == 1)
+        podium = [d for d in ranked if d.get("finish_pos", 99) <= 3]
+        pred["result"] = {
+            "winner": winner["driver"],
+            "model_pick": ranked[0]["driver"],
+            "pick_won": ranked[0]["driver"] == winner["driver"],
+            "p_winner": winner["p_win"],
+            "winner_model_rank": ranked.index(winner) + 1,
+            "podium": [d["driver"] for d in sorted(podium, key=lambda d: d["finish_pos"])],
+            "podium_hits": sum(d["driver"] in {x["driver"] for x in ranked[:3]} for d in podium),
+        }
+        scored.append(pred)
+    return scored
+
+
+def next_event(after_round):
+    sched = fastf1.get_event_schedule(data.SEASON, include_testing=False)
+    nxt = sched[sched["RoundNumber"] > after_round].head(1)
+    if nxt.empty:
+        return None
+    ev = nxt.iloc[0]
+    return {"round": int(ev.RoundNumber), "event": ev.EventName,
+            "date": ev.EventDate.strftime("%Y-%m-%d")}
+
+
+def main():
+    df = features.build()
+    cols = model.usable_features(df)
+    done = df[df.groupby("round")["finish_pos"].transform("count") > 0]
+    upcoming = df[~df["round"].isin(done["round"])]
+
+    # 1. backtest + calibrate on every finished race
+    bt = walk_forward(done, cols)
+    sigma, _ = calibrate_sigma(bt)
+    bt_races, bt_summary = backtest_report(bt, sigma)
+
+    pd.set_option("display.width", 200)
+    print(f"\nModel {MODEL_VERSION}, features: {cols}")
+    print(f"Calibrated noise sigma: {sigma} positions\n")
+    print("Backtest (walk-forward):")
+    print(bt_races.to_string(index=False))
+    s = bt_summary
+    print(f"\n  top pick correct : {s['top_pick_correct']}/{s['races']}"
+          f"   (baseline 'pole sitter wins': {s['pole_sitter_won']}/{s['races']})")
+    print(f"  winner in top 3  : {s['winner_in_top3']}/{s['races']}")
+    print(f"  avg prob given to actual winner: {s['avg_p_winner']:.1%}\n")
+
+    # 2. predict the upcoming race, if its weekend has started
+    prediction = None
+    if not upcoming.empty:
+        rnd = int(upcoming["round"].min())
+        prediction = predict_race(upcoming[upcoming["round"] == rnd], done, cols, sigma)
+        RACES.mkdir(parents=True, exist_ok=True)
+        (RACES / f"round-{rnd}.json").write_text(json.dumps(prediction, indent=2))
+        label = "PROVISIONAL (pre-qualifying)" if prediction["provisional"] else "grid from qualifying"
+        print(f"{prediction['event']}: {label}")
+        print(pd.DataFrame(prediction["drivers"])[["driver", "team", "grid", "pred_pos", "p_win", "p_podium"]]
+              .head(10).to_string(index=False))
+    else:
+        print("No upcoming race data yet (next weekend hasn't started).")
+
+    # 3. score frozen predictions against real results
+    live = score_live(df)
+    for p in live:
+        r = p["result"]
+        print(f"Live R{p['round']} {p['event']}: pick {r['model_pick']} ({'won' if r['pick_won'] else 'lost'}), "
+              f"winner {r['winner']} given {r['p_winner']:.1%}, podium {r['podium_hits']}/3 in model top 3")
+
+    # ---- export for the website
+    site = {
+        "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "model_version": MODEL_VERSION,
+        "next_event": next_event(int(done["round"].max())),
+        "prediction": prediction,
+        "live": live,
+        "backtest": {"summary": bt_summary, "races": bt_races.to_dict(orient="records"), "sigma": sigma},
+    }
+    SITE_DATA.mkdir(parents=True, exist_ok=True)
+    (SITE_DATA / "site.json").write_text(json.dumps(site, indent=2))
     # Same data as a script, so docs/index.html also works when opened straight from disk.
-    OUT.with_suffix(".js").write_text(f"window.PREDICTION = {json.dumps(out)};\n")
-    print(f"\nWrote {OUT.relative_to(ROOT)} (+ .js)")
+    (SITE_DATA / "site.js").write_text(f"window.SITE = {json.dumps(site)};\n")
+    print(f"\nWrote docs/data/site.json (+ .js)")
 
 
 if __name__ == "__main__":
