@@ -29,47 +29,70 @@ MIN_STINT_LAPS = 4     # a "long run" needs at least this many consistent laps
 RUN_WINDOW = 1.04      # laps within 4% of the stint's best lap count as "race pace"
 MIN_CONSISTENT = 0.75  # ...and they must be 75%+ of the stint (rejects push/cool-down quali runs)
 NEUTRALISED = "4567"   # TrackStatus codes: 4 SC, 5 red flag, 6/7 VSC. Yellows (2) are fine.
+REF_DRIVERS = 5        # each session's reference pace = median of its 5 fastest long runs
+MAX_AHEAD = -1.0       # nobody is genuinely >1% faster than that on race fuel; cap low-fuel runs
 
 
-def _load(round_no, identifier, laps=True):
+def _load(round_no, identifier, laps=True, messages=False):
     """Load a session, or return None if it doesn't exist / has no data yet."""
     try:
         s = fastf1.get_session(SEASON, round_no, identifier)
-        s.load(laps=laps, telemetry=False, weather=False, messages=False)
+        s.load(laps=laps, telemetry=False, weather=False, messages=messages)
         if s.results is None or s.results.empty:
             return None
+        if identifier in ("Q", "R") and s.results["Position"].isna().all():
+            return None  # session listed but not classified yet
         return s
     except Exception:
         return None
 
 
-def long_run_pace(sessions):
-    """Median lap time of each driver's best long run across the practice sessions.
+def _session_long_runs(s):
+    """Each driver's fastest long-run median (seconds) in one session.
 
     A stint counts as a long run if most of its laps sit within RUN_WINDOW of
     its best lap (a quali run alternates push / cool-down laps, so it fails).
-    Each driver's fastest long-run median is returned as % gap to the best driver.
     """
-    runs = []
+    laps = s.laps
+    status = laps["TrackStatus"].astype(str)
+    laps = laps[
+        laps["LapTime"].notna()
+        & laps["PitInTime"].isna()
+        & laps["PitOutTime"].isna()
+        & ~status.apply(lambda st: any(c in st for c in NEUTRALISED))
+        & (laps["Deleted"] != True)  # noqa: E712 (column can hold NaN)
+    ].copy()
+    laps["t"] = laps["LapTime"].dt.total_seconds()
+    runs = {}
+    for (drv, _stint), g in laps.groupby(["Driver", "Stint"]):
+        pace = g[g["t"] < g["t"].min() * RUN_WINDOW]
+        if len(pace) >= MIN_STINT_LAPS and len(pace) / len(g) >= MIN_CONSISTENT:
+            runs[drv] = min(runs.get(drv, float("inf")), pace["t"].median())
+    return pd.Series(runs, dtype=float)
+
+
+def long_run_pace(sessions):
+    """Long-run pace as % gap to the front-runners, combined across practice sessions.
+
+    Sessions run in different conditions (Bahrain FP1/FP3 in afternoon heat,
+    FP2 at night), so drivers are only compared within a session: % gap to the
+    median of that session's REF_DRIVERS fastest long runs (one outlier run
+    can't set the reference). Implausibly fast runs are capped at MAX_AHEAD.
+    Sessions are then averaged, weighted by how many drivers did long runs.
+    """
+    gaps, weights = [], []
     for s in sessions:
-        laps = s.laps
-        status = laps["TrackStatus"].astype(str)
-        laps = laps[
-            laps["LapTime"].notna()
-            & laps["PitInTime"].isna()
-            & laps["PitOutTime"].isna()
-            & ~status.apply(lambda st: any(c in st for c in NEUTRALISED))
-            & (laps["Deleted"] != True)  # noqa: E712 (column can hold NaN)
-        ].copy()
-        laps["t"] = laps["LapTime"].dt.total_seconds()
-        for (drv, _stint), g in laps.groupby(["Driver", "Stint"]):
-            pace = g[g["t"] < g["t"].min() * RUN_WINDOW]
-            if len(pace) >= MIN_STINT_LAPS and len(pace) / len(g) >= MIN_CONSISTENT:
-                runs.append((drv, pace["t"].median()))
-    if not runs:
+        best = _session_long_runs(s)
+        if len(best) < REF_DRIVERS:
+            continue
+        gap = (best / best.nsmallest(REF_DRIVERS).median() - 1) * 100
+        gaps.append(gap.clip(lower=MAX_AHEAD))
+        weights.append(len(best))
+    if not gaps:
         return pd.Series(dtype=float)
-    best = pd.DataFrame(runs, columns=["driver", "t"]).groupby("driver")["t"].min()
-    return (best / best.min() - 1) * 100
+    g = pd.concat(gaps, axis=1)
+    w = pd.Series(weights, index=g.columns, dtype=float)
+    return (g * w).sum(axis=1) / g.notna().mul(w).sum(axis=1)
 
 
 def quali_table(q):
@@ -86,7 +109,10 @@ def quali_table(q):
 
 def weekend(round_no, event_name):
     practice = [s for s in (_load(round_no, p) for p in ("FP1", "FP2", "FP3")) if s]
-    q = _load(round_no, "Q", laps=False)
+    # Right after a session the official results aren't out yet. FastF1 can then
+    # work qualifying out from lap times, but that needs the laps plus race
+    # control messages (deleted laps for track limits), so only do it then.
+    q = _load(round_no, "Q", laps=False) or _load(round_no, "Q", laps=True, messages=True)
     r = _load(round_no, "R", laps=False)
     if q is None and r is None and not practice:
         return None

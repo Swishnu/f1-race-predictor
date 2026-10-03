@@ -137,7 +137,7 @@
   <section>
     <h2>How it works</h2>
     <div class="steps">
-      <div class="step"><h3>Data</h3><p>Every 2026 session via FastF1: qualifying, race results, and each driver's long-run practice pace (consistent 4+ lap stints, safety-car laps removed).</p></div>
+      <div class="step"><h3>Data</h3><p>Every 2026 session via FastF1: qualifying, race results, and each driver's long-run practice pace (consistent 4+ lap stints, safety-car laps removed). Pace is compared within each session, because day and night sessions run at very different speeds, and then combined.</p></div>
       <div class="step"><h3>Model</h3><p>A ridge regression predicts each driver's finishing position from grid slot, qualifying gap, long-run pace, championship points and, since v2, whether a strong car is starting out of position. It predicts position, not "win", because 300+ finishing positions teach more than a handful of winners.</p></div>
       <div class="step"><h3>Simulation</h3><p>A Monte Carlo simulation of 20,000 races: predicted position + random noise, random DNFs, and on street circuits a likely safety car that shuffles the order. Win % = how often each driver finishes first.</p></div>
       <div class="step"><h3>Calibration</h3><p>The noise level is not guessed. It's the value whose podium odds best matched real 2026 results. Calibrating on winners alone overfit to a predictable season and made the model overconfident.</p></div>
